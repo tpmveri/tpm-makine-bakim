@@ -1,0 +1,58 @@
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TPM Makina Bakım V6.0 - Hakan AYAN</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+  font-family: Arial, sans-serif;
+  color: white;
+  background: linear-gradient(135deg, #081521, #174765, #10283f);
+}
+.card {
+  display: block; width: 100%; max-width: 650px;
+  padding: 40px 24px; text-align: center;
+  color: white; text-decoration: none;
+  border: 1px solid #54849e; border-radius: 25px;
+  background: rgba(255,255,255,.08);
+  box-shadow: 0 15px 45px #06111c80;
+  transition: .2s;
+}
+.card:hover { transform: translateY(-4px); border-color: #69dfd1; }
+.gear {
+  width: 100px; height: 100px; margin: 0 auto 24px;
+  display: grid; place-items: center; border-radius: 25px;
+  background: #174765; border: 2px solid #69c9d4;
+  font-size: 58px;
+}
+h1 { font-size: clamp(30px, 6vw, 46px); margin: 0; }
+h1 span { color: #69dfd1; }
+.version { color: #c5e0ed; letter-spacing: 2px; }
+.line { width: 65px; height: 3px; background: #69dfd1; margin: 25px auto; }
+.creator { line-height: 1.8; }
+.button {
+  display: inline-block; margin-top: 20px; padding: 16px 24px;
+  border-radius: 12px; background: #69dfd1; color: #082538;
+  font-weight: bold;
+}
+.hint { color: #c5d5e0; font-size: 13px; }
+</style>
+</head>
+<body>
+<a class="card" href="https://tpmveri.github.io/tpm-makine-bakim/" target="_blank" rel="noopener">
+  <div class="gear">⚙</div>
+  <h1><span>TPM</span> Makina Bakım</h1>
+  <p class="version">V6.0 • BAKIM YÖNETİM SİSTEMİ</p>
+  <div class="line"></div>
+  <p class="creator">Oluşturan<br><strong>Bakım Onarım Müdürü Hakan AYAN</strong></p>
+  <div class="button">PROGRAMI AÇMAK İÇİN TIKLAYIN ➜</div>
+  <p class="hint">Programı açmak için bu karta dokunun.</p>
+</a>
+</body>
+</html>
