@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TPM V6.0 — Tek Dosya Düzeltme Aracı</title>
+<style>
+*{box-sizing:border-box}body{background:#edf5fb;color:#13273b;font:16px/1.6 system-ui,Arial,sans-serif;margin:0;padding:30px 14px}main{max-width:760px;margin:auto;background:#fff;border:1px solid #d2dfeb;border-radius:18px;padding:30px;box-shadow:0 12px 35px #17334e12}h1{font-size:25px;margin:0 0 4px;color:#075985}h2{font-size:17px;margin:24px 0 5px}p{margin:8px 0 12px}input{width:100%;padding:14px;border:2px dashed #a7bbcf;border-radius:10px}button{margin:17px 0;padding:14px 20px;background:#0369a1;color:#fff;border:0;border-radius:9px;font-weight:700;font-size:15px;cursor:pointer}button:disabled{background:#94a3b8;cursor:not-allowed}code{padding:2px 5px;background:#f0f4f8;border-radius:3px}#result{white-space:pre-line;padding:12px;border:1px solid #d2dfeb;background:#f7fafc;border-radius:9px;min-height:40px}ol{padding-left:24px}.muted{font-size:13px;color:#5d7188}
+</style></head><body><main><h1>⚙ TPM V6.0 — Düzeltme Aracı</h1>
+<p>Sayfayı Yenile düğmesinin sizi personel seçimine göndermesini önlemek ve Supabase canlı veri güncellemelerini eklemek için hazırlanmıştır.</p>
+<h2>1. Orijinal <code>index.html</code> dosyanızı seçin</h2>
+<p>Dosyayı GitHub deponuzdan indirin. Bu işlem yalnızca bilgisayarınızda çalışır; hiçbir dosya başka yere yüklenmez.</p>
+<input id="file" type="file" accept=".html,text/html">
+<h2>2. Yeni dosyayı oluşturun</h2>
+<button id="go">Düzeltilmiş index.html oluştur</button>
+<div id="result" role="status">Hazır. Orijinal index.html seçilmesini bekliyorum.</div>
+<h2>3. Yayınlama</h2>
+<ol><li>İndirilen yeni <code>index.html</code> dosyasını GitHub'daki aynı dosyanın yerine koyun.</li><li>Supabase SQL Editor'da paketteki <code>Supabase_Realtime_Ayar.sql</code> kodunu çalıştırın.</li><li>Telefonda ve bilgisayarda giriş yapıp personel seçin; veriler otomatik güncellenirken sayfa yeniden açılmamalıdır.</li></ol>
+<p class="muted">Eski dosyanız yerinde kalır. Düzeltici veri tabanına bağlanmaz. GitHub dosyanızın yedeğini saklayın. Canlı ortamda uygulamadan önce test edin.</p>
+</main>
+<script id="tpm-patch-code" type="text/plain">/* TPM Makine Bakım V6.0 - Canlı veri / oturum düzeltmesi (2026-11)
+ * Bu dosya mevcut index.html içindeki ANA uygulama <script> bloğından SONRA yüklenmelidir.
+ * Mevcut kayıtları SİLMEZ; gelen verileri okur ve yerel görünümü günceller.
+ * İşletme veritabanı şeması değişmeden çalışır.
+ */
+(function () {
+  'use strict';
+  const PATCH_VERSION = 'TPM-LIVE-1.0';
+  if (window.__tpmLivePatchVersion) return;
+  window.__tpmLivePatchVersion = PATCH_VERSION;
+
+  const PERSON_KEY = 'TPM_SECILI_PERSONEL_SEKME_V1';
+  const PAGE_KEY = 'TPM_ACIK_MENU_SEKME_V1';
+  const LIST_KEYS = [
+    'TPM_ARIZA_KAYITLARI', 'TPM_L_PLANLAR',
+    'TPM_IS_TALEPLERI', 'TPM_KULLANICI_SORUNLARI'
+  ];
+  const LIST_SET = new Set(LIST_KEYS);
+  const MAX_BACKUP_DELAY = 20000; // Realtime çalışmadığında 20 saniyede bir kontrol
+  const NORMAL_CHECK_DELAY = 90000; // Realtime çalışırken kaçırılan olaylara karşı kontrol
+  let duringStartup = false;
+  let currentClient = null;
+  let currentChannel = null;
+  let realtimeState = 'bekliyor';
+  let remoteUpdateTimer = null;
+  let updateInProgress = false;
+  let updateQueued = false;
+  let lastUpdateAt = 0;
+  let syncingError = null;
+  const previousPageAtStartup = safeGet(sessionStorage, PAGE_KEY);
+
+  function safeGet(storage, key) {
+    try { return storage.getItem(key); } catch (_) { return null; }
+  }
+  function safePut(storage, key, value) {
+    try { storage.setItem(key, value); } catch (_) { /* depolama engellenmiş olabilir */ }
+  }
+  function safeRemove(storage, key) {
+    try { storage.removeItem(key); } catch (_) { /* depolama engellenmiş olabilir */ }
+  }
+  function readArray(raw) {
+    try { const a = JSON.parse(raw || '[]'); return Array.isArray(a) ? a : []; }
+    catch (_) { return []; }
+  }
+  function readObject(raw) {
+    try { const x = JSON.parse(raw || 'null'); return x && typeof x === 'object' ? x : null; }
+    catch (_) { return null; }
+  }
+  function canUseCloud() {
+    return !tpmDemoMode && cloudReady && !!tpmAuthSession && !!window.TPM_ACTIVE_USER;
+  }
+  function personFromSavedId() {
+    const id = safeGet(sessionStorage, PERSON_KEY);
+    if (!id || !Array.isArray(PERSONEL)) return null;
+    return PERSONEL.find(x => x && String(x.id) === id && x.aktif === 'Evet') || null;
+  }
+  function applyPerson(person) {
+    window.TPM_ACTIVE_USER = { ...person };
+    const gate = document.getElementById('tpm-login-gate');
+    if (gate) gate.style.display = 'none';
+    const reporter = document.getElementById('it-bildiren');
+    if (reporter) reporter.value = person.ad || '';
+    updateTpmCurrentUser();
+  }
+
+  // Güvenlik oturumu geçerliyse, yalnızca sayfa yeniden açılırken personeli geri yükle.
+  // 'Kullanıcı Değiştir' veya yeni bir güvenlik girişi yine gerçek personel seçimini açar.
+  const originalShowPersonSelection = window.tpmShowPersonSelection;
+  window.tpmShowPersonSelection = function () {
+    if (duringStartup && !tpmDemoMode && cloudReady && tpmAuthSession) {
+      const saved = personFromSavedId();
+      if (saved) { applyPerson(saved); return; }
+    }
+    return originalShowPersonSelection.apply(this, arguments);
+  };
+  const originalConfirmPerson = window.tpmConfirmPerson;
+  window.tpmConfirmPerson = function (e) {
+    const result = originalConfirmPerson.apply(this, arguments);
+    if (window.TPM_ACTIVE_USER && window.TPM_ACTIVE_USER.id != null) {
+      safePut(sessionStorage, PERSON_KEY, String(window.TPM_ACTIVE_USER.id));
+      scheduleLiveStart();
+    }
+    return result;
+  };
+  const originalChangeUser = window.tpmChangeUser;
+  window.tpmChangeUser = function () {
+    safeRemove(sessionStorage, PERSON_KEY);
+    safeRemove(sessionStorage, PAGE_KEY);
+    stopLive();
+    return originalChangeUser.apply(this, arguments);
+  };
+  const originalLogout = window.tpmLogout;
+  window.tpmLogout = async function () {
+    safeRemove(sessionStorage, PERSON_KEY);
+    safeRemove(sessionStorage, PAGE_KEY);
+    stopLive();
+    return originalLogout.apply(this, arguments);
+  };
+  const originalDemo = window.tpmStartDemo;
+  window.tpmStartDemo = function () {
+    safeRemove(sessionStorage, PERSON_KEY);
+    stopLive();
+    return originalDemo.apply(this, arguments);
+  };
+  const originalSwitchPage = window.switchPage;
+  window.switchPage = function (pageId) {
+    const r = originalSwitchPage.apply(this, arguments);
+    if (window.TPM_ACTIVE_USER && document.getElementById('page-' + pageId)?.classList.contains('active')) {
+      safePut(sessionStorage, PAGE_KEY, String(pageId));
+    }
+    return r;
+  };
+
+  // Yenile düğmesi artık window.location.reload() çağırmaz.
+  window.refreshSharedData = async function () {
+    await pullCloudRows(true);
+  };
+
+  function liveBadge(message, mode) {
+    const host = document.getElementById('cloud-status');
+    if (!host) return;
+    let el = document.getElementById('tpm-live-indicator');
+    if (!el) {
+      el = document.createElement('span');
+      el.id = 'tpm-live-indicator';
+      el.style.cssText = 'font-size:11px;line-height:1.5;padding:3px 8px;border-radius:8px;border:1px solid #cbd5e1;background:#f8fafc;white-space:nowrap';
+      host.insertAdjacentElement('afterend', el);
+    }
+    const colors = { ok: '#047857', warn: '#b45309', off: '#64748b' };
+    el.style.color = colors[mode] || colors.off;
+    el.textContent = 'Canlı veri: ' + message;
+    el.title = mode === 'warn'
+      ? 'Realtime bağlantısını ve Supabase Database > Publications ayarlarını kontrol edin.'
+      : 'Kayıtlar sayfa yeniden yüklenmeden güncellenir.';
+  }
+
+  function hasPendingLocalWrites() {
+    return cloudWriteTimers.size > 0 || cloudRetryValues.size > 0;
+  }
+  function rowStamp(row) { return Number(row?.updatedAt) || recordStamp(row?.record) || 0; }
+  function recordStampSafe(rec) { return Number(recordStamp(rec)) || 0; }
+
+  function mergedListFromServer(key, rows, previous) {
+    const records = new Map();
+    const deletions = new Map();
+    let foundAnything = false;
+    const legacy = rows.find(x => x.id === key);
+    if (legacy) {
+      foundAnything = true;
+      for (const r of readArray(legacy.data)) {
+        if (!r || r.id == null) continue;
+        records.set(String(r.id), { record: r, stamp: recordStampSafe(r), priority: 0 });
+      }
+    }
+    for (const raw of rows) {
+      const parsed = parseItemRow(raw, key);
+      if (!parsed) continue;
+      foundAnything = true;
+      const stamp = rowStamp(parsed);
+      if (parsed.deleted) {
+        const old = deletions.get(parsed.id);
+        if (old === undefined || stamp > old) deletions.set(parsed.id, stamp);
+        continue;
+      }
+      if (!parsed.record) continue;
+      const old = records.get(parsed.id);
+      if (!old || stamp >= old.stamp) {
+        records.set(parsed.id, { record: parsed.record, stamp, priority: 1 });
+      }
+    }
+    if (!foundAnything) return null;
+
+    // Kaydedilmeyi bekleyen yerel verileri silmemek için daha yeni yerel sürüm korunur.
+    for (const rec of previous) {
+      if (!rec || rec.id == null) continue;
+      const id = String(rec.id), stamp = recordStampSafe(rec);
+      const old = records.get(id);
+      // Sunucuda silinmiş kayıt, tarayıcıdaki eski kopyadan geri doğmasın.
+      if (deletions.has(id)) continue;
+      if (!old || stamp > old.stamp) {
+        records.set(id, { record: rec, stamp, priority: 0 });
+      }
+    }
+    const present = new Map();
+    for (const [id, x] of records.entries()) {
+      const tomb = deletions.get(id);
+      if (tomb === undefined || x.stamp > tomb) present.set(id, x.record);
+    }
+    // Mevcut sıralamayı koru; yeni gelen kayıtları öne al.
+    const previouslySeen = new Set(previous.map(r => String(r?.id)));
+    const additions = Array.from(present.entries())
+      .filter(([id]) => !previouslySeen.has(id))
+      .sort((a, b) => recordStampSafe(b[1]) - recordStampSafe(a[1]))
+      .map(([,rec]) => rec);
+    const existing = previous.filter(r => r && r.id != null && present.has(String(r.id)))
+      .map(r => present.get(String(r.id)));
+    return additions.concat(existing);
+  }
+
+  function updateAppVariables(changed) {
+    if (changed.has('TPM_ARIZA_KAYITLARI')) {
+      ARIZA_KAYITLARI = readArray(localStorage.getItem('TPM_ARIZA_KAYITLARI'));
+    }
+    if (changed.has('TPM_L_PLANLAR')) {
+      L_PLANLAR = readArray(localStorage.getItem('TPM_L_PLANLAR'));
+    }
+    if (changed.has('TPM_PERSONEL')) {
+      PERSONEL = readArray(localStorage.getItem('TPM_PERSONEL'));
+      // Güncellenen personelin bilgilerini ekranda yenile, yeni personel seçimine geçme.
+      const id = window.TPM_ACTIVE_USER?.id;
+      const current = PERSONEL.find(p => String(p.id) === String(id));
+      if (current && current.aktif === 'Evet') {
+        window.TPM_ACTIVE_USER = { ...current };
+        updateTpmCurrentUser();
+      }
+    }
+    if (changed.has('TPM_MAKINELER')) MAKINELER = readArray(localStorage.getItem('TPM_MAKINELER'));
+    if (changed.has('TPM_DURUS_KODLARI')) DURUS_KODLARI = readArray(localStorage.getItem('TPM_DURUS_KODLARI'));
+    if (changed.has('TPM_FABRIKA')) {
+      FABRIKA = { ...FABRIKA, ...(readObject(localStorage.getItem('TPM_FABRIKA')) || {}) };
+      updateSidebarFabrika();
+    }
+  }
+  function updateVisibleView(changed) {
+    if (!changed.size) return;
+    // Modal açıkken veya kullanıcı form doldururken formu sıfırlama.
+    const current = document.querySelector('.page-view.active')?.id || '';
+    const anyModalOpen = !!document.querySelector('.modal.active');
+    if (anyModalOpen) return;
+    try {
+      switch (current) {
+        case 'page-dashboard': renderDashboard(); break;
+        case 'page-durus-zaman-cizelgesi': renderDurusZamanCizelgesi(); break;
+        case 'page-ariza-kapatma': renderArizaKapatmaListesi(); break;
+        case 'page-ariza-kayitlari': renderArizaKayitlari(); break;
+        case 'page-l-plan': renderLPlanListesi(); break;
+        case 'page-op-uyum': renderOpUyum(); break;
+        case 'page-tpm-rapor': renderTpm(); break;
+        case 'page-raporlar': renderRapor(); break;
+        case 'page-is-talep': renderIsTalepleri(); break;
+        case 'page-isg-is-kapatma': renderIsgKapatmaListesi(); break;
+        case 'page-kullanici-sorunlari': renderKullaniciSorunlari(); break;
+        case 'page-yonetim':
+          // Yönetim formlarını kullanıcı yazarken sıfırlamayalım.
+          if (!document.activeElement?.closest('form')) renderYonetimLists();
+          break;
+        default: break; // Yeni arıza, hızlı arıza vb. form ekranları korunur.
+      }
+    } catch (err) {
+      console.warn('[TPM CANLI] Görünüm güncellenemedi; manuel yenileme kullanılabilir.', err);
+    }
+  }
+  async function pullCloudRows(manual) {
+    if (!canUseCloud()) {
+      if (manual) liveBadge('giriş veya bağlantı bekleniyor', 'warn');
+      return;
+    }
+    if (updateInProgress) { updateQueued = true; return; }
+    if (hasPendingLocalWrites()) {
+      // Yazma sırasında alınan eski görüntü, yeni yerel kaydı silebilir.
+      queuePull(900);
+      return;
+    }
+    updateInProgress = true;
+    const btn = document.getElementById('cloud-refresh');
+    if (manual && btn) { btn.disabled = true; btn.textContent = '↻ Veriler alınıyor…'; }
+    try {
+      const rows = await cloudGetRows(); // Salt OKUMA: Supabase'e kayıt yazmaz.
+      if (hasPendingLocalWrites()) { updateQueued = true; return; }
+      const changed = new Set();
+      const scalarById = new Map(rows.filter(r => !String(r.id).startsWith(TPM_ITEM_PREFIX)).map(r => [String(r.id), r]));
+      for (const key of LIST_KEYS) {
+        const original = readArray(cloudOriginalGetItem.call(localStorage, key));
+        const merged = mergedListFromServer(key, rows, original);
+        if (merged === null) continue;
+        const next = JSON.stringify(merged);
+        const before = cloudOriginalGetItem.call(localStorage, key);
+        if (before !== next) {
+          cloudOriginalSetItem.call(localStorage, key, next); // Senkronize veriyi TEKRAR Supabase'e yazma.
+          changed.add(key);
+        }
+      }
+      for (const [key, row] of scalarById) {
+        if (!isSharedCloudKey(key) || LIST_SET.has(key) || typeof row.data !== 'string') continue;
+        const before = cloudOriginalGetItem.call(localStorage, key);
+        if (before !== row.data) {
+          cloudOriginalSetItem.call(localStorage, key, row.data);
+          changed.add(key);
+        }
+      }
+      updateAppVariables(changed);
+      updateVisibleView(changed);
+      lastUpdateAt = Date.now();
+      syncingError = null;
+      if (manual) liveBadge('güncellendi', 'ok');
+    } catch (err) {
+      syncingError = err;
+      console.warn('[TPM CANLI] Veri okuma hatası:', err);
+      liveBadge('bağlantıyı kontrol edin', 'warn');
+    } finally {
+      updateInProgress = false;
+      if (manual && btn) { btn.disabled = false; btn.textContent = '↻ Verileri Yenile'; }
+      if (updateQueued) { updateQueued = false; queuePull(900); }
+    }
+  }
+  function queuePull(delay = 350) {
+    if (tpmDemoMode || !cloudReady) return;
+    if (remoteUpdateTimer) return;
+    remoteUpdateTimer = setTimeout(function () {
+      remoteUpdateTimer = null;
+      pullCloudRows(false);
+    }, delay);
+  }
+
+  function stopLive() {
+    if (remoteUpdateTimer) { clearTimeout(remoteUpdateTimer); remoteUpdateTimer = null; }
+    if (currentClient && currentChannel) {
+      try { currentClient.removeChannel(currentChannel); } catch (_) {}
+    }
+    currentChannel = null;
+    currentClient = null;
+    realtimeState = 'bekliyor';
+    liveBadge('kapalı', 'off');
+  }
+  async function scheduleLiveStart() {
+    if (!canUseCloud() || currentChannel) return;
+    if (!window.supabase || !window.supabase.createClient) {
+      realtimeState = 'bağlı değil';
+      liveBadge('SDK yüklenemedi; aralıklı kontrol', 'warn');
+      queuePull(1000);
+      return;
+    }
+    try {
+      const token = await tpmGetAccessToken();
+      if (!canUseCloud() || currentChannel) return;
+      const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+      });
+      client.realtime.setAuth(token);
+      const channel = client
+        .channel('tpm-v6-senkron-' + Math.random().toString(36).slice(2, 9))
+        .on('postgres_changes', {
+          event: '*', schema: 'public', table: 'tpm_shared_data'
+        }, function () {
+          queuePull(350);
+        });
+      currentClient = client;
+      currentChannel = channel;
+      realtimeState = 'bağlanıyor';
+      liveBadge('bağlanıyor', 'off');
+      channel.subscribe(function (status) {
+        if (currentChannel !== channel) return;
+        if (status === 'SUBSCRIBED') {
+          realtimeState = 'bağlı';
+          liveBadge('bağlı', 'ok');
+          queuePull(300);
+        } else if (['CHANNEL_ERROR', 'TIMED_OUT', 'CLOSED'].includes(status)) {
+          realtimeState = 'kesildi';
+          liveBadge('kesildi; aralıklı kontrol', 'warn');
+        }
+      });
+    } catch (err) {
+      console.warn('[TPM CANLI] Realtime başlatılamadı:', err);
+      realtimeState = 'kesildi';
+      liveBadge('aralıklı kontrol', 'warn');
+    }
+  }
+  const previousOnload = window.onload;
+  window.onload = async function () {
+    duringStartup = true;
+    try {
+      await previousOnload.apply(this, arguments);
+    } finally {
+      duringStartup = false;
+    }
+    if (canUseCloud()) {
+      if (previousPageAtStartup && document.getElementById('page-' + previousPageAtStartup)) {
+        try { window.switchPage(previousPageAtStartup); } catch (e) { console.warn(e); }
+      }
+      scheduleLiveStart();
+    }
+  };
+
+  // Bağlantı geri geldiğinde ve sekmeye dönüldüğünde kayıtları doğrula.
+  window.addEventListener('online', () => {
+    if (canUseCloud()) { scheduleLiveStart(); queuePull(700); }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && canUseCloud()) queuePull(400);
+  });
+  window.addEventListener('focus', () => {
+    if (canUseCloud() && Date.now() - lastUpdateAt > 3000) queuePull(400);
+  });
+  setInterval(async () => {
+    if (!canUseCloud() || document.hidden) return;
+    if (currentClient) {
+      try {
+        const refreshedToken = await tpmGetAccessToken();
+        currentClient.realtime.setAuth(refreshedToken);
+      } catch (err) { console.warn('[TPM CANLI] Oturum yenilenemedi:', err); }
+    } else {
+      scheduleLiveStart();
+    }
+  }, 45000);
+  setInterval(() => {
+    if (!canUseCloud() || document.hidden) return;
+    const wait = realtimeState === 'bağlı' ? NORMAL_CHECK_DELAY : MAX_BACKUP_DELAY;
+    if (Date.now() - lastUpdateAt >= wait) queuePull(350);
+  }, 5000);
+  console.info('[TPM CANLI] Yüklendi:', PATCH_VERSION);
+})();
+</script>
+<script>
+(function(){
+ const file=document.getElementById('file'),out=document.getElementById('result'),btn=document.getElementById('go');
+ btn.addEventListener('click',async()=>{
+  if(!file.files.length){out.textContent='Önce index.html dosyasını seçin.';return;}
+  btn.disabled=true;
+  try{
+   let html=await file.files[0].text();
+   if(!html.includes('function refreshSharedData()')||!html.includes('function tpmShowPersonSelection()')||!html.includes('SUPABASE_REST_URL'))throw Error('Seçilen dosya desteklenen TPM V6.0 index.html değil. Lütfen GitHub ana dizinindeki güncel index.html dosyasını seçin.');
+   if(html.includes('TPM-LIVE-1.0')||html.includes('tpm_canli_duzeltme.js'))throw Error('Bu dosya daha önce canlı güncelleme düzeltmesi almış. Üzerine ikinci kez uygulamayın.');
+   if(!/<\/body>/i.test(html))throw Error('index.html içinde kapanış body etiketi bulunamadı.');
+   const source=document.getElementById('tpm-patch-code').textContent;
+   const end='</'+'script>';
+   const addition='\n<!-- TPM canlı veri / oturum düzeltmesi -->\n'+
+    '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">'+end+'\n'+
+    '<script>\n'+source+'\n'+end+'\n';
+   html=html.replace(/<\/body>/i,addition+'</body>');
+   const blob=new Blob([html],{type:'text/html;charset=utf-8'});
+   const url=URL.createObjectURL(blob);
+   const a=document.createElement('a');a.href=url;a.download='index.html';document.body.appendChild(a);a.click();a.remove();
+   setTimeout(()=>URL.revokeObjectURL(url),3000);
+   out.textContent='✅ Düzeltilmiş index.html dosyası oluşturuldu.\n\nDosyayı GitHub deponuzdaki index.html yerine koyun. Sonra Supabase_Realtime_Ayar.sql ayarını uygulayın.\n\nİlk girişte personelinizi seçin. Sonraki aynı sekmedeki yenilemelerde yeniden sormaz.';
+  }catch(e){out.textContent='❌ '+e.message;}finally{btn.disabled=false;}
+ });
+})();
+</script></body></html>
